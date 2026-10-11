@@ -1,0 +1,46 @@
+Privacy Policy for MYTHODES SERVITOR
+
+This Privacy Policy explains how MYTHODES SERVITOR, a Discord bot developed by vassilis, collects, uses, and shares information. The bot provides tabletop role-playing game skill tests and opposed dice rolls through Discord commands and interactive forms.
+
+Information We Collect
+When you interact with the bot, it receives information from Discord, including your Discord user ID, username or display name, server and channel information, and details of your interaction.
+
+The bot processes information you submit through its commands and forms, including character and opponent names, skill names and ratings, difficulty settings, modifiers, optional manual dice results, and comments describing a test.
+
+The Discord library used by the bot may temporarily cache messages and related information that Discord makes available to it. The bot does not request general message-content access or maintain a persistent archive of server conversations.
+
+Technical errors may generate diagnostic logs containing error details. The bot does not maintain usage analytics tracking how frequently or how long individual users use it.
+
+How We Use Your Information
+We use your information to process commands, calculate dice rolls and test outcomes, display results, and operate interactive setup forms. Your Discord display name is used as the default participant name unless you provide another name. Your Discord user ID is used to restrict access to your setup controls.
+
+We may use diagnostic information and information you provide when contacting us to troubleshoot problems and respond to support requests. We do not use your information for advertising or profiling.
+
+Sharing Your Information
+We do not sell your personal information. Information is exchanged with Discord as necessary to operate the bot. Any hosting provider used to run the bot may process information necessary to provide that hosting.
+
+Guided setup panels are visible only to the user who starts them. Completed rolls are posted to the channel where the command was used and are visible to people who can access that channel. Results may include participant names, skill information, comments, dice results, and test outcomes. Quick commands also post their results directly to the channel.
+
+Discord processes information under its own privacy policy.
+
+We may disclose information when required by applicable law or valid legal process.
+
+Data Retention
+The bot does not save user profiles, command histories, or roll results to a separate database or application data files. Setup information and cached Discord data are held temporarily in memory.
+
+Guided setup panels close when completed or cancelled, or after approximately ten minutes of inactivity. Closing a panel does not guarantee immediate deletion of all associated information from memory or from Discord.
+
+Published roll results remain in Discord until deleted. Removing the bot does not automatically remove its previous messages.
+
+Data Security
+The bot uses private setup panels and checks the initiating user's Discord ID before allowing changes through setup controls.
+No method of transmission or storage is completely secure, and we cannot guarantee absolute security.
+
+Changes to this Policy
+We may update this Privacy Policy as the bot or its information-handling practices change. We will publish the revised policy at the same location where this policy is made available and update its effective date.
+
+Contact Us
+If you have questions about this Privacy Policy or wish to make a request concerning your information, please contact vassilis at vassilisr1993@gmail.com
+
+Effective Date
+This Privacy Policy is effective as of September 29, 2026.
