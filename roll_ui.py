@@ -1,12 +1,14 @@
-"""Private, guided Discord forms for preparing a roll."""
+"""Private, guided Discord forms for preparing a roll, and buttons for changing a posted roll."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import partial
 import logging
+import random
 from typing import Optional
 
 import discord
 
-from rolls import Difficulty, build_opposed_result, build_tiered_result, modify_skill_rating
+from rolls import Difficulty, build_opposed_result, build_tiered_result, flip_roll, modify_skill_rating
 
 
 log = logging.getLogger(__name__)
@@ -333,23 +335,6 @@ class RollSetupView(discord.ui.View):
         self.stop()
         await interaction.response.edit_message(content="Test cancelled.", embed=None, view=None)
 
-    def result(self) -> str:
-        your = self.your
-        if self.opponent is None:
-            return build_tiered_result(
-                skill_rating=your.skill_rating, difficulty=your.difficulty, modifier=your.modifier,
-                roll=your.roll, your_name=your.name, comment=self.comment, skill_name=your.skill_name,
-            )
-        opponent = self.opponent
-        return build_opposed_result(
-            your_skill_rating=your.skill_rating, your_difficulty=your.difficulty,
-            your_modifier=your.modifier, your_roll=your.roll, your_name=your.name,
-            your_skill_name=your.skill_name, opponent_skill_rating=opponent.skill_rating,
-            opponent_difficulty=opponent.difficulty, opponent_modifier=opponent.modifier,
-            opponent_roll=opponent.roll, opponent_name=opponent.name,
-            opponent_skill_name=opponent.skill_name, comment=self.comment,
-        )
-
     async def submit_roll(self, interaction: discord.Interaction):
         if not await self.interaction_check(interaction):
             return
@@ -367,11 +352,7 @@ class RollSetupView(discord.ui.View):
         # Set before the first await so double clicks cannot publish two rolls.
         self.finished = True
         try:
-            output = self.result()
-            kwargs = {"content": output} if len(output) <= 2000 else {"embed": discord.Embed(description=output)}
-            await interaction.response.send_message(
-                **kwargs, ephemeral=False, allowed_mentions=discord.AllowedMentions.none()
-            )
+            await RollResultView(self.your, self.opponent, self.comment).send(interaction)
         except Exception:
             self.finished = False
             raise
@@ -405,3 +386,108 @@ class RollSetupView(discord.ui.View):
         except discord.NotFound as response_error:
             if not log_expired_interaction(interaction, response_error):
                 raise
+
+
+def message_kwargs(text: str) -> dict:
+    # Long names and comments can push a result past Discord's 2000-character message limit.
+    long = len(text) > 2000
+    return {
+        "content": None if long else text,
+        "embed": discord.Embed(description=text) if long else None,
+        "allowed_mentions": discord.AllowedMentions.none(),
+    }
+
+
+class RollResultView(discord.ui.View):
+    """A posted result where each participant may once reroll, flip, or force the opponent to reroll."""
+
+    def __init__(self, your: Participant, opponent: Optional[Participant] = None, comment: str = ""):
+        # ponytail: buttons live in memory and close after 10 minutes, inside the 15-minute token that
+        # removes them; use persistent views if play-by-post needs longer or buttons must survive restarts.
+        super().__init__(timeout=SETUP_TIMEOUT)
+        # Roll copies now, so every change rebuilds the result from the same criteria.
+        self.your, self.opponent = (
+            None if p is None else replace(p, roll=random.randint(1, 100) if p.roll is None else p.roll)
+            for p in (your, opponent)
+        )
+        self.comment = comment
+        self.changes = []
+        self.interaction = None
+        sides = [p for p in (self.your, self.opponent) if p is not None and p.skill_rating is not None]
+        for row, actor in enumerate(sides):
+            actions = [(actor, "Reroll"), (actor, "Flip")]
+            actions += [(other, f"Force {other.name[:30]} to reroll") for other in sides if other is not actor]
+            for target, action in actions:
+                if target.difficulty not in (Difficulty.AUTOMATIC, Difficulty.IMPOSSIBLE):
+                    button = discord.ui.Button(label=f"{actor.name[:30]}: {action}", row=row)
+                    button.callback = partial(self.change, row=row, actor=actor, target=target, flipped=action == "Flip")
+                    self.add_item(button)
+
+    def result(self) -> str:
+        your = self.your
+        if self.opponent is None:
+            return build_tiered_result(
+                skill_rating=your.skill_rating, difficulty=your.difficulty, modifier=your.modifier,
+                roll=your.roll, your_name=your.name, comment=self.comment, skill_name=your.skill_name,
+            )
+        opponent = self.opponent
+        return build_opposed_result(
+            your_skill_rating=your.skill_rating, your_difficulty=your.difficulty,
+            your_modifier=your.modifier, your_roll=your.roll, your_name=your.name,
+            your_skill_name=your.skill_name, opponent_skill_rating=opponent.skill_rating,
+            opponent_difficulty=opponent.difficulty, opponent_modifier=opponent.modifier,
+            opponent_roll=opponent.roll, opponent_name=opponent.name,
+            opponent_skill_name=opponent.skill_name, comment=self.comment,
+        )
+
+    def text(self) -> str:
+        result = self.result().rstrip()
+        return result + "\n\n" + "\n".join(self.changes) if self.changes else result
+
+    async def send(self, interaction: discord.Interaction):
+        self.interaction = interaction
+        # send_message rejects view=None, so a result with nothing to change posts without one.
+        await interaction.response.send_message(
+            **message_kwargs(self.text()), view=self if self.children else discord.utils.MISSING
+        )
+
+    async def change(
+        self, interaction: discord.Interaction, *, row: int, actor: Participant, target: Participant, flipped: bool,
+    ):
+        buttons = [item for item in self.children if item.row == row]
+        if not buttons:
+            # A quick second click can arrive before Discord hides the used buttons.
+            await interaction.response.send_message(f"**{actor.name}** has already changed this roll.", ephemeral=True)
+            return
+        old = target.roll
+        verb = "flipped" if flipped else "rerolled" if target is actor else f"forced **{target.name}** to reroll"
+        # Apply before the first await so a double click cannot change the roll twice.
+        target.roll = flip_roll(old) if flipped else random.randint(1, 100)
+        change = f"**{actor.name}** {verb}: **{old}** → **{target.roll}**"
+        self.changes.append(change)
+        for item in buttons:
+            self.remove_item(item)
+        try:
+            await interaction.response.edit_message(
+                **message_kwargs(self.text()), view=self if self.children else None
+            )
+        except Exception:
+            # Undo, so a click Discord rejected can be retried.
+            target.roll = old
+            self.changes.remove(change)
+            for item in buttons:
+                self.add_item(item)
+            raise
+        self.interaction = interaction
+        if not self.children:
+            self.stop()
+
+    async def on_timeout(self):
+        try:
+            await self.interaction.edit_original_response(view=None)
+        except discord.HTTPException:
+            pass  # The result may have been deleted.
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item):
+        if not log_expired_interaction(interaction, error):
+            await super().on_error(interaction, error, item)

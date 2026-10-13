@@ -118,6 +118,11 @@ def resolve_test(
     return {"roll": roll, "result": result_tier, "success": is_success}
 
 
+def flip_roll(roll: int) -> int:
+    """Swap a d100's tens and units dice: 71 becomes 17, 07 becomes 70, and 00 (100) stays 100."""
+    return roll % 10 * 10 + roll // 10 % 10 or 100
+
+
 def format_test_result(
     subject: str, skill_rating: int, results: dict, skill_name: Optional[str] = None,
     *, original_skill_rating: Optional[int] = None,
