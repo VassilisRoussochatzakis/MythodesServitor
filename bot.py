@@ -4,17 +4,8 @@ from constants import BOT_TOKEN
 import discord
 from discord import app_commands
 
-from rolls import (
-    Difficulty,
-    Tier,
-    build_opposed_result,
-    build_tiered_result,
-    format_test_result,
-    get_victory_magnitude,
-    modify_skill_rating,
-    resolve_test,
-)
-from roll_ui import Participant, RollSetupView, log_expired_interaction
+from rolls import Difficulty
+from roll_ui import Participant, RollResultView, RollSetupView, log_expired_interaction
 
 
 class MyClient(discord.Client):
@@ -70,33 +61,18 @@ async def tiered(
     your_name: Optional[app_commands.Range[str, 1, 100]] = None,
     comment: Optional[app_commands.Range[str, 1, 1000]] = None,
     skill_name: Optional[app_commands.Range[str, 1, 100]] = None):
-    your_name = your_name or interaction.user.display_name
-    if skill_rating is None:
-        view = RollSetupView(
-            owner_id=interaction.user.id,
-            your=Participant(
-                name=your_name,
-                skill_rating=skill_rating,
-                difficulty=difficulty,
-                modifier=modifier,
-                roll=roll,
-                skill_name=skill_name or "",
-            ),
-            comment=comment or "",
-        )
-        await view.start(interaction)
-        return
-
-    results_str = build_tiered_result(
+    your = Participant(
+        name=your_name or interaction.user.display_name,
         skill_rating=skill_rating,
         difficulty=difficulty,
         modifier=modifier,
         roll=roll,
-        your_name=your_name,
-        comment=comment,
-        skill_name=skill_name,
+        skill_name=skill_name or "",
     )
-    await interaction.response.send_message(results_str)
+    if skill_rating is None:
+        await RollSetupView(owner_id=interaction.user.id, your=your, comment=comment or "").start(interaction)
+    else:
+        await RollResultView(your, comment=comment or "").send(interaction)
 
 @client.tree.command(description="Compare opposed tests; omit your skill rating for guided setup.")
 @app_commands.describe(
@@ -128,50 +104,28 @@ async def opposed(
     comment: Optional[app_commands.Range[str, 1, 1000]] = None,
     your_skill_name: Optional[app_commands.Range[str, 1, 100]] = None,
     opponent_skill_name: Optional[app_commands.Range[str, 1, 100]] = None):
-    your_name = your_name or interaction.user.display_name
-    opponent_name = opponent_name or "Your opponent"
-    if your_skill_rating is None:
-        view = RollSetupView(
-            owner_id=interaction.user.id,
-            your=Participant(
-                name=your_name,
-                skill_rating=your_skill_rating,
-                difficulty=your_difficulty,
-                modifier=your_modifier,
-                roll=your_roll,
-                skill_name=your_skill_name or "",
-            ),
-            opponent=Participant(
-                name=opponent_name,
-                skill_rating=opponent_skill_rating,
-                difficulty=opponent_difficulty,
-                modifier=opponent_modifier,
-                roll=opponent_roll,
-                skill_name=opponent_skill_name or "",
-            ),
-            comment=comment or "",
-        )
-        await view.start(interaction)
-        return
-
-    final_output = build_opposed_result(
-        your_skill_rating=your_skill_rating,
-        your_difficulty=your_difficulty,
-        your_modifier=your_modifier,
-        your_roll=your_roll,
-        opponent_skill_rating=opponent_skill_rating,
-        opponent_difficulty=opponent_difficulty,
-        opponent_modifier=opponent_modifier,
-        opponent_roll=opponent_roll,
-        your_name=your_name,
-        opponent_name=opponent_name,
-        comment=comment,
-        your_skill_name=your_skill_name,
-        opponent_skill_name=opponent_skill_name,
+    your = Participant(
+        name=your_name or interaction.user.display_name,
+        skill_rating=your_skill_rating,
+        difficulty=your_difficulty,
+        modifier=your_modifier,
+        roll=your_roll,
+        skill_name=your_skill_name or "",
     )
-    # Long names and comments can push this past Discord's 2000-character message limit.
-    kwargs = {"content": final_output} if len(final_output) <= 2000 else {"embed": discord.Embed(description=final_output)}
-    await interaction.response.send_message(**kwargs)
+    opponent = Participant(
+        name=opponent_name or "Your opponent",
+        skill_rating=opponent_skill_rating,
+        difficulty=opponent_difficulty,
+        modifier=opponent_modifier,
+        roll=opponent_roll,
+        skill_name=opponent_skill_name or "",
+    )
+    if your_skill_rating is None:
+        await RollSetupView(
+            owner_id=interaction.user.id, your=your, opponent=opponent, comment=comment or "",
+        ).start(interaction)
+    else:
+        await RollResultView(your, opponent, comment or "").send(interaction)
 
 
 if __name__ == '__main__':

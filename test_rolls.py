@@ -2,7 +2,7 @@
 
 import unittest
 
-from rolls import Difficulty, Tier, build_tiered_result, resolve_test
+from rolls import Difficulty, Tier, build_tiered_result, flip_roll, resolve_test
 
 T = Tier
 TABLES = {
@@ -32,6 +32,11 @@ class TieredTests(unittest.TestCase):
     def test_tiered_command_uses_tiers(self):
         self.assertIn("Superb Success", build_tiered_result(40, roll=20))
         self.assertIn("Grand Success", build_tiered_result(40, difficulty=Difficulty.AUTOMATIC))
+
+    def test_flip_swaps_d100_dice(self):
+        for roll, flipped in ((71, 17), (7, 70), (10, 1), (100, 100), (55, 55)):
+            self.assertEqual(flip_roll(roll), flipped, roll)
+        self.assertEqual(sorted(flip_roll(roll) for roll in range(1, 101)), list(range(1, 101)))
 
 
 if __name__ == "__main__":

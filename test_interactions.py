@@ -33,7 +33,7 @@ def interaction(*, responded=False):
         user=SimpleNamespace(id=42, display_name="Player"),
         response=SimpleNamespace(
             is_done=Mock(return_value=responded),
-            send_modal=AsyncMock(), send_message=AsyncMock(), defer=AsyncMock(),
+            send_modal=AsyncMock(), send_message=AsyncMock(), edit_message=AsyncMock(), defer=AsyncMock(),
         ),
         followup=SimpleNamespace(send=AsyncMock()),
     )
@@ -52,10 +52,40 @@ class InteractionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_direct_opposed_result_over_2000_characters_uses_embed(self):
         for length, key in ((2000, "content"), (2001, "embed")):
-            with self.subTest(length=length), patch.object(bot, "build_opposed_result", return_value="x" * length):
+            with self.subTest(length=length), patch.object(roll_ui, "build_opposed_result", return_value="x" * length):
                 current = interaction()
                 await bot.opposed.callback(current, your_skill_rating=50)
-                self.assertEqual(list(current.response.send_message.await_args.kwargs), [key])
+                kwargs = current.response.send_message.await_args.kwargs
+                self.assertEqual([name for name in ("content", "embed") if kwargs[name] is not None], [key])
+
+    async def test_each_participant_changes_a_posted_roll_once(self):
+        view = roll_ui.RollResultView(roll_ui.Participant("Ann", 50, roll=71), roll_ui.Participant("Bob", 40, roll=20))
+        self.assertEqual([button.label for button in view.children], [
+            "Ann: Reroll", "Ann: Flip", "Ann: Force Bob to reroll",
+            "Bob: Reroll", "Bob: Flip", "Bob: Force Ann to reroll",
+        ])
+        ann_flip, bob_force = view.children[1], view.children[5]
+        rejected = interaction()
+        rejected.response.edit_message.side_effect = not_found()
+        with self.assertRaises(discord.NotFound):
+            await ann_flip.callback(rejected)
+        self.assertEqual((view.your.roll, len(view.children), view.changes), (71, 6, []))
+
+        await ann_flip.callback(interaction())
+        stale = interaction()
+        await ann_flip.callback(stale)
+        stale.response.send_message.assert_awaited_once()
+        self.assertEqual((view.your.roll, len(view.children)), (17, 3))
+
+        current = interaction()
+        with patch("roll_ui.random.randint", return_value=5):
+            await bob_force.callback(current)
+        kwargs = current.response.edit_message.await_args.kwargs
+        self.assertIn("**Ann** flipped: **71** → **17**\n**Bob** forced **Ann** to reroll: **17** → **5**", kwargs["content"])
+        self.assertIsNone(kwargs["view"])
+        self.assertTrue(view.is_finished())
+        no_die = roll_ui.Participant("Ann", 50, roll_ui.Difficulty.AUTOMATIC)
+        self.assertEqual(roll_ui.RollResultView(no_die).children, [])
 
     async def test_only_unknown_interaction_is_classified_as_expired(self):
         current = interaction()
