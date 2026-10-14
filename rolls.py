@@ -39,7 +39,7 @@ SUPPORTS = {
     "Reining": "Higher skill. Rolled first; a success guarantees at least a Standard Success.",
     "Foretelling": "Higher skill. Rolled first; its Tier makes your test easier or harder.",
     "Usurping": "Higher skill. Same roll against both skills; the better result counts.",
-    "Gambit": "Equal or lower skill on a penalized test. Rolled first, one step harder; shifts your difficulty.",
+    "Gambit": "Equal or lower skill, penalized test. Rolled first, a step harder; shifts difficulty, may add Tiers.",
     "Temper": "Equal or lower skill. Rolled after a successful test; a success adds +1 Tier.",
     "Attune": "Equal or lower skill. Same roll; +1 Tier if it succeeds against both skills.",
     "Ward": "Equal or lower skill. Rolled first; a success softens your failures.",
@@ -50,13 +50,17 @@ SUPPORTS = {
 }
 # These need Supporting Skills higher than the Main Skill; the rest need them equal or lower.
 HIGHER_SUPPORTS = {"Honing", "Bolstering", "Empowering", "Reining", "Foretelling", "Usurping"}
-# A Supporting Tier's (penalties negated, steps easier) for the Main Test; a Fumble is an automatic Fumble.
+# A Supporting Tier's (penalties negated, steps easier, Tiers added to the roll) for the Main Test;
+# a Fumble is an automatic Fumble.
 FORETELLING = {
-    Tier.SERIOUS_FAILURE: (0, -3), Tier.FAILURE: (0, -2), Tier.PARTIAL_FAILURE: (0, -1),
-    Tier.STANDARD_SUCCESS: (1, 0), Tier.SUPERB_SUCCESS: (2, 0), Tier.GRAND_SUCCESS: (2, 1),
-    Tier.CRITICAL_SUCCESS: (2, 2),
+    Tier.SERIOUS_FAILURE: (0, -3, 0), Tier.FAILURE: (0, -2, 0), Tier.PARTIAL_FAILURE: (0, -1, 0),
+    Tier.STANDARD_SUCCESS: (1, 0, 0), Tier.SUPERB_SUCCESS: (2, 0, 0), Tier.GRAND_SUCCESS: (2, 1, 0),
+    Tier.CRITICAL_SUCCESS: (2, 2, 0),
 }
-GAMBIT = {**FORETELLING, Tier.SUPERB_SUCCESS: (0, 1), Tier.GRAND_SUCCESS: (0, 2), Tier.CRITICAL_SUCCESS: (1, 2)}
+GAMBIT = {
+    **FORETELLING, Tier.STANDARD_SUCCESS: (0, 1, 0), Tier.SUPERB_SUCCESS: (0, 1, 1),
+    Tier.GRAND_SUCCESS: (0, 2, 1), Tier.CRITICAL_SUCCESS: (0, 2, 2),
+}
 NO_ROLL = (Difficulty.AUTOMATIC, Difficulty.IMPOSSIBLE)
 
 
@@ -174,8 +178,8 @@ def shift(difficulty: Difficulty, *, easier: int = 0, negate: int = 0) -> Diffic
     return steps[min(max(index + easier, 0), len(steps) - 1)]
 
 
-def improve(tier: Tier) -> Tier:
-    return Tier(min(tier + 1, Tier.CRITICAL_SUCCESS))
+def improve(tier: Tier, tiers: int = 1) -> Tier:
+    return Tier(min(tier + tiers, Tier.CRITICAL_SUCCESS))
 
 
 def describe_roll(
@@ -232,14 +236,16 @@ def perform_test(
         lines.append(f"*{kind}*{skill}{hardness}: {action} → {title(results['result'])}")
         return results['result']
 
-    diff, first = difficulty, None
+    diff, first, bonus = difficulty, None, 0
     if kind in ("Reining", "Foretelling", "Gambit", "Ward", "Mirror"):
         # These Test the Supporting Skill before the Main Skill.
         first = supporting(0, shift(difficulty, easier=-1) if kind == "Gambit" else difficulty)
         if kind in ("Foretelling", "Gambit") and first != Tier.FUMBLE:
-            negate, easier = (FORETELLING if kind == "Foretelling" else GAMBIT)[first]
+            negate, easier, bonus = (FORETELLING if kind == "Foretelling" else GAMBIT)[first]
             diff = shift(difficulty, easier=easier, negate=negate)
             lines[-1] += f"; the test {'stays' if diff == difficulty else 'becomes'} {title(diff)}"
+            if bonus:
+                lines[-1] += f", +{bonus} Tier to the roll"
 
     target = modify_skill_rating(skill_rating, diff, modifier)
     if kind in ("Foretelling", "Gambit") and first == Tier.FUMBLE:
@@ -254,7 +260,9 @@ def perform_test(
 
     S = Tier.STANDARD_SUCCESS
     main = final = results['result']
-    if kind == "Reining" and main != Tier.FUMBLE:
+    if kind == "Gambit":
+        final = improve(main, bonus)
+    elif kind == "Reining" and main != Tier.FUMBLE:
         if first >= S:
             final = improve(max(first, main)) if main >= S else S
         elif main < S:

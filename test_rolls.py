@@ -35,9 +35,12 @@ SUPPORT_EXAMPLES = [
     ("Empowering", 70, 71, [95], [], T.PARTIAL_FAILURE),
     ("Empowering", 80, 70, [100], [40], T.SUPERB_SUCCESS),
     ("Empowering", 80, 70, [100], [20], T.GRAND_SUCCESS),
-    # Gambit's supporting 65 is Tested at Formidable (33); Standard negates the penalty, Partial adds one.
+    # Gambit's supporting 65 is Tested at Formidable (33). Standard eases Hard to Standard (90) and Partial
+    # hardens it to Formidable (45); Superb also adds a Tier, and Critical eases it to Easy (135) and adds two.
     ("Gambit", 90, 80, [65], [26], T.STANDARD_SUCCESS, D.HARD),
     ("Gambit", 90, 50, [65], [37], T.PARTIAL_FAILURE, D.HARD),
+    ("Gambit", 90, 80, [65], [15], T.SUPERB_SUCCESS, D.HARD),
+    ("Gambit", 90, 80, [65], [3], T.CRITICAL_SUCCESS, D.HARD),
     ("Temper", 90, 85, [60], [21], T.SUPERB_SUCCESS),
     ("Temper", 90, 85, [60], [70], T.STANDARD_SUCCESS),
     ("Attune", 90, 85, [60], [], T.STANDARD_SUCCESS),
