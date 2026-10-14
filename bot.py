@@ -43,7 +43,7 @@ async def on_ready():
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message(f'Pong! {round(interaction.client.latency * 1000)} ms')
 
-@client.tree.command(description="Run a skill test; omit the skill rating for guided setup.")
+@client.tree.command(description="Run a skill test; omit the skill rating for guided setup and supporting skills.")
 @app_commands.describe(
     skill_rating='Your unmodified skill value (leave blank for guided setup)',
     difficulty='The difficulty of your test',
@@ -74,7 +74,7 @@ async def tiered(
     else:
         await RollResultView(your, comment=comment or "").send(interaction)
 
-@client.tree.command(description="Compare opposed tests; omit your skill rating for guided setup.")
+@client.tree.command(description="Compare opposed tests; omit your skill rating for guided setup and supporting skills.")
 @app_commands.describe(
     your_skill_rating='Your unmodified skill value (leave blank for guided setup)',
     your_difficulty='The difficulty of your test',

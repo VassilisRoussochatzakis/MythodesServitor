@@ -36,6 +36,7 @@ def interaction(*, responded=False):
             send_modal=AsyncMock(), send_message=AsyncMock(), edit_message=AsyncMock(), defer=AsyncMock(),
         ),
         followup=SimpleNamespace(send=AsyncMock()),
+        original_response=AsyncMock(),
     )
 
 
@@ -86,6 +87,37 @@ class InteractionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(view.is_finished())
         no_die = roll_ui.Participant("Ann", 50, roll_ui.Difficulty.AUTOMATIC)
         self.assertEqual(roll_ui.RollResultView(no_die).children, [])
+
+    async def test_each_participant_sets_support_checked_at_roll_and_kept_on_reroll(self):
+        tiered = roll_ui.RollSetupView(42, roll_ui.Participant("Ann", 70))
+        view = roll_ui.RollSetupView(42, roll_ui.Participant("Ann", 70), roll_ui.Participant("Bob", 50))
+        self.assertEqual([button.label for button in tiered.children if button.row == 1], ["Your support"])
+        self.assertEqual([button.label for button in view.children if button.row == 1],
+                         ["Your support", "Opponent support"])
+
+        # Saved drafts prefill the form, so submitting it unchanged enters them.
+        view.drafts["opponent_support"] = {"kind": "Rally", "ratings": "40, 30", "names": "Climb, Swim"}
+        modal = roll_ui.SupportModal(view, opponent=True)
+        self.assertTrue(all(len(option.description or "") <= 100 for option in modal.kind_input.options))
+        current = interaction()
+        await modal.on_submit(current)
+        self.assertEqual(view.opponent.support, roll_ui.Support("Rally", [40, 30], ["Climb", "Swim"]))
+        bob = current.response.send_message.await_args.kwargs["embed"].fields[1].value
+        self.assertIn("Support: **Rally** with Climb (**40**), Swim (**30**)", bob)
+
+        view.your.support = roll_ui.Support("Honing", [60])
+        current = interaction()
+        await view.submit_roll(current)
+        self.assertIn("Honing needs", current.response.edit_message.await_args.kwargs["content"])
+        self.assertFalse(view.finished)
+
+        result = roll_ui.RollResultView(roll_ui.Participant("Ann", 90, roll=97, support=roll_ui.Support("Mend", [60])))
+        support_rolls = result.your.support.rolls
+        self.assertIn("*Mend*: rolled", result.text())
+        with patch("roll_ui.random.randint", return_value=50):
+            await result.children[0].callback(interaction())
+        self.assertIn("*Mend*: not used", result.text())
+        self.assertIs(result.your.support.rolls, support_rolls)
 
     async def test_only_unknown_interaction_is_classified_as_expired(self):
         current = interaction()
