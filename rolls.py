@@ -1,6 +1,7 @@
 """Shared roll rules and result formatting for slash commands and guided setup."""
 
-from enum import Enum
+from dataclasses import dataclass, field
+from enum import Enum, IntEnum
 from fractions import Fraction
 import math
 import random
@@ -19,7 +20,7 @@ class Difficulty(Enum):
     AUTOMATIC = 100.0
 
 
-class Tier(Enum):
+class Tier(IntEnum):
     FUMBLE = 0
     SERIOUS_FAILURE = 1
     FAILURE = 2
@@ -28,6 +29,48 @@ class Tier(Enum):
     SUPERB_SUCCESS = 5
     GRAND_SUCCESS = 6
     CRITICAL_SUCCESS = 7
+
+
+# Supporting Skill mechanics in rulebook order, summarised for the setup form.
+SUPPORTS = {
+    "Honing": "Higher skill. Same roll; a successful test gains +1 Tier if the support's Tier is better.",
+    "Bolstering": "Higher skill. Same roll; +1 Tier if the support's Tier is better, even on a failure.",
+    "Empowering": "Higher skill. Rolled after a successful test; the better Tier counts.",
+    "Reining": "Higher skill. Rolled first; a success guarantees at least a Standard Success.",
+    "Foretelling": "Higher skill. Rolled first; its Tier makes your test easier or harder, and may add Tiers.",
+    "Usurping": "Higher skill. Same roll against both skills; the better result counts.",
+    "Gambit": "Equal or lower skill, penalized test. Rolled first, a step harder; shifts difficulty, may add Tiers.",
+    "Temper": "Equal or lower skill. Rolled after a successful test; a success adds +1 Tier.",
+    "Attune": "Equal or lower skill. Same roll; +1 Tier if it succeeds against both skills.",
+    "Ward": "Equal or lower skill. Rolled first; a success softens your failures.",
+    "Mend": "Equal or lower skill. Rolled after a failed test, one penalty less; a success adds +1 Tier.",
+    "Rally": "Up to 3 equal or lower skills, rolled after a failed test; each success adds +1 Tier.",
+    "Redeem": "Equal or lower skill. Rolled after a failed test; a success makes it a Standard Success.",
+    "Mirror": "Equal or lower skill. Rolled first; a success lets your roll be flipped.",
+}
+# These need Supporting Skills higher than the Main Skill; the rest need them equal or lower.
+HIGHER_SUPPORTS = {"Honing", "Bolstering", "Empowering", "Reining", "Foretelling", "Usurping"}
+# A Supporting Tier's (penalties negated, steps easier, Tiers added to the roll) for the Main Test;
+# a Fumble is an automatic Fumble.
+FORETELLING = {
+    Tier.SERIOUS_FAILURE: (0, -3, 0), Tier.FAILURE: (0, -2, 0), Tier.PARTIAL_FAILURE: (0, -1, 0),
+    Tier.STANDARD_SUCCESS: (1, 0, 0), Tier.SUPERB_SUCCESS: (2, 0, 0), Tier.GRAND_SUCCESS: (2, 0, 1),
+    Tier.CRITICAL_SUCCESS: (2, 0, 2),
+}
+GAMBIT = {
+    **FORETELLING, Tier.STANDARD_SUCCESS: (0, 1, 0), Tier.SUPERB_SUCCESS: (0, 1, 1),
+    Tier.GRAND_SUCCESS: (0, 2, 1), Tier.CRITICAL_SUCCESS: (0, 2, 2),
+}
+NO_ROLL = (Difficulty.AUTOMATIC, Difficulty.IMPOSSIBLE)
+
+
+@dataclass
+class Support:
+    """Supporting Skill ratings (several only for Rally), each Tested in order with its own d100."""
+    kind: str
+    ratings: list[int]
+    names: list[str] = field(default_factory=list)
+    rolls: list[int] = field(default_factory=list)
 
 
 def modify_skill_rating(skill_rating: int, difficulty: Difficulty, modifier: int = 0) -> int:
@@ -123,26 +166,169 @@ def flip_roll(roll: int) -> int:
     return roll % 10 * 10 + roll // 10 % 10 or 100
 
 
-def format_test_result(
-    subject: str, skill_rating: int, results: dict, skill_name: Optional[str] = None,
-    *, original_skill_rating: Optional[int] = None,
+def title(member: Enum) -> str:
+    return member.name.replace("_", " ").title()
+
+
+def shift(difficulty: Difficulty, *, easier: int = 0, negate: int = 0) -> Difficulty:
+    """Move a difficulty by steps; negating penalties stops at Standard, and four steps reach Automatic or Impossible."""
+    steps = list(Difficulty)
+    index = steps.index(difficulty)
+    index = max(index, min(index + negate, steps.index(Difficulty.STANDARD)))
+    return steps[min(max(index + easier, 0), len(steps) - 1)]
+
+
+def improve(tier: Tier, tiers: int = 1) -> Tier:
+    return Tier(min(tier + tiers, Tier.CRITICAL_SUCCESS))
+
+
+def describe_roll(
+    subject: str, skill_rating: int, results: dict, *, original_skill_rating: Optional[int] = None,
     difficulty: Difficulty = Difficulty.STANDARD, modifier: int = 0,
 ) -> str:
-    result_name = results['result'].name.replace("_", " ").title()
-    skill_suffix = f" on **{skill_name}**" if skill_name else ""
     details = []
     if difficulty != Difficulty.STANDARD:
         if original_skill_rating is not None:
             details.append(f"original: **{original_skill_rating}**")
         if modifier:
             details.append(f"modifier: **{modifier:+d}**")
-        difficulty_name = difficulty.name.replace("_", " ").title()
-        details.append(f"difficulty: **{difficulty_name}**")
+        details.append(f"difficulty: **{title(difficulty)}**")
     difficulty_suffix = f" ({', '.join(details)})" if details else ""
     if results['roll'] is None:
         action = "succeeds automatically" if results['success'] else "cannot attempt an impossible test"
-        return f"\n**{subject}** {action}{difficulty_suffix}.\n**{result_name}**{skill_suffix}!"
-    return f"\n**{subject}** rolled: **{results['roll']}** with a target of **{skill_rating}**{difficulty_suffix}\n**{result_name}**{skill_suffix}!"
+        return f"**{subject}** {action}{difficulty_suffix}"
+    return f"**{subject}** rolled: **{results['roll']}** with a target of **{skill_rating}**{difficulty_suffix}"
+
+
+def describe_tier(tier: Tier, skill_name: Optional[str] = None) -> str:
+    skill_suffix = f" on **{skill_name}**" if skill_name else ""
+    return f"**{title(tier)}**{skill_suffix}!"
+
+
+def perform_test(
+    name: str, skill_rating: int, difficulty: Difficulty = Difficulty.STANDARD, modifier: int = 0,
+    roll: Optional[int] = None, skill_name: Optional[str] = None, support: Optional[Support] = None,
+) -> tuple[int, dict, str]:
+    """Resolve a Tiered Test and any Supporting Skills, describing each roll in the order it happens.
+
+    Returns the final target, the final results and their description.
+    """
+    target = modify_skill_rating(skill_rating, difficulty, modifier)
+    if support is None or difficulty in NO_ROLL:
+        results = resolve_test(target, roll, True, difficulty)
+        roll_line = describe_roll(
+            name, target, results, original_skill_rating=skill_rating, difficulty=difficulty, modifier=modifier,
+        )
+        period = "." if results['roll'] is None else ""
+        return target, results, f"\n{roll_line}{period}\n{describe_tier(results['result'], skill_name)}"
+
+    kind, lines = support.kind, []
+    roll = random.randint(1, 100) if roll is None else roll
+
+    def supporting(i: int, support_difficulty: Difficulty = difficulty, same_roll: bool = False) -> Tier:
+        """Test one Supporting Skill, describe it, and return its Tier."""
+        support_target = modify_skill_rating(support.ratings[i], support_difficulty)
+        results = resolve_test(support_target, roll if same_roll else support.rolls[i], True, support_difficulty)
+        rolled = "the same roll" if same_roll else f"rolled **{results['roll']}**"
+        action = "cannot be attempted" if results['roll'] is None else f"{rolled} with a target of **{support_target}**"
+        skill = f" with **{support.names[i]}**" if i < len(support.names) and support.names[i] else ""
+        hardness = "" if support_difficulty == Difficulty.STANDARD else f" ({title(support_difficulty)})"
+        lines.append(f"*{kind}*{skill}{hardness}: {action} → {title(results['result'])}")
+        return results['result']
+
+    diff, first, bonus = difficulty, None, 0
+    if kind in ("Reining", "Foretelling", "Gambit", "Ward", "Mirror"):
+        # These Test the Supporting Skill before the Main Skill.
+        first = supporting(0, shift(difficulty, easier=-1) if kind == "Gambit" else difficulty)
+        if kind in ("Foretelling", "Gambit") and first != Tier.FUMBLE:
+            negate, easier, bonus = (FORETELLING if kind == "Foretelling" else GAMBIT)[first]
+            diff = shift(difficulty, easier=easier, negate=negate)
+            lines[-1] += f"; the test {'stays' if diff == difficulty else 'becomes'} {title(diff)}"
+            if bonus:
+                lines[-1] += f", +{bonus} {'Tier' if bonus == 1 else 'Tiers'} to the roll"
+
+    target = modify_skill_rating(skill_rating, diff, modifier)
+    if kind in ("Foretelling", "Gambit") and first == Tier.FUMBLE:
+        results = {"roll": None, "result": Tier.FUMBLE, "success": False}
+        lines.append(f"**{name}** fumbles automatically")
+    else:
+        results = resolve_test(target, roll, True, diff)
+        roll_line = describe_roll(
+            name, target, results, original_skill_rating=skill_rating, difficulty=diff, modifier=modifier,
+        )
+        lines.append(f"{roll_line} → {title(results['result'])}")
+
+    S = Tier.STANDARD_SUCCESS
+    main = final = results['result']
+    if main == Tier.FUMBLE:
+        # Fumbles always stay Fumbles, so support not rolled yet goes unused.
+        if first is None:
+            lines.append(f"*{kind}*: not used")
+    elif kind in ("Foretelling", "Gambit"):
+        final = improve(main, bonus)
+    elif kind == "Reining":
+        if first >= S:
+            final = improve(max(first, main)) if main >= S else S
+        elif main < S:
+            final = max(first, main)
+    elif kind == "Ward" and first >= S and main < S:
+        if first == Tier.CRITICAL_SUCCESS:
+            final = S
+        else:
+            # Each Level of Success softens the failure, but at best to a Partial Failure.
+            final = Tier(min(main + first - Tier.PARTIAL_FAILURE, Tier.PARTIAL_FAILURE))
+    elif kind == "Mirror" and first >= S:
+        flipped = resolve_test(target, flip_roll(roll), True, diff)
+        # A higher roll in the same Tier wins opposed ties, so it is also worth flipping for.
+        if (flipped['result'], flipped['roll']) > (main, roll):
+            lines.append(f"*Mirror*: flipped to **{flipped['roll']}** → {title(flipped['result'])}")
+            results, final = flipped, flipped['result']
+    elif kind in ("Honing", "Empowering", "Temper") and main < S or kind in ("Mend", "Redeem", "Rally") and main >= S:
+        lines.append(f"*{kind}*: not used")
+    elif kind == "Usurping":
+        final = max(main, supporting(0, same_roll=True))
+    elif kind in ("Honing", "Bolstering"):
+        if supporting(0, same_roll=True) > main:
+            final = improve(main)
+    elif kind == "Attune":
+        if supporting(0, same_roll=True) >= S and main >= S:
+            final = improve(main)
+    elif kind == "Empowering":
+        final = max(main, supporting(0))
+    elif kind == "Temper":
+        if supporting(0) >= S:
+            final = improve(main)
+    elif kind == "Mend":
+        if supporting(0, shift(difficulty, negate=1)) >= S:
+            final = improve(main)
+    elif kind == "Redeem":
+        if supporting(0) >= S:
+            final = S
+    elif kind == "Rally":
+        # Each success, at a stacking one-step penalty, softens the failure; any failure ends the Rally.
+        for i in range(len(support.ratings)):
+            if final >= S or supporting(i, shift(difficulty, easier=-i)) < S:
+                break
+            final = Tier(final + 1)
+
+    # A success granted to a failed roll has no D100 result to win ties with.
+    tie_roll = 0 if final >= S and results['result'] < S and kind != "Usurping" else results['roll']
+    lines.append(describe_tier(final, skill_name))
+    return target, {"roll": tie_roll, "result": final, "success": final >= S}, "\n" + "\n".join(lines)
+
+
+def support_problem(skill_rating: int, difficulty: Difficulty, support: Support) -> Optional[str]:
+    """Explain why Supporting Skills cannot help this Main Skill Test, or return None if they can."""
+    kind = support.kind
+    if difficulty in NO_ROLL:
+        return f"{kind} needs a test with a die roll, not an {title(difficulty)} one."
+    higher = kind in HIGHER_SUPPORTS
+    if any((rating > skill_rating) != higher for rating in support.ratings):
+        relation = "higher than" if higher else "equal to or lower than"
+        return f"{kind} needs supporting skill ratings {relation} the main skill rating ({skill_rating})."
+    if kind == "Gambit" and difficulty.value >= Difficulty.STANDARD.value:
+        return "Gambit needs a test that is already harder than Standard."
+    return None
 
 
 def get_victory_magnitude(levels_of_success: int) -> str:
@@ -166,16 +352,10 @@ def build_tiered_result(
     your_name: str = "You",
     comment: Optional[str] = None,
     skill_name: Optional[str] = None,
+    support: Optional[Support] = None,
 ) -> str:
     """Resolve a single test and return its public result message."""
-    original_skill_rating = skill_rating
-    skill_rating = modify_skill_rating(skill_rating, difficulty, modifier)
-    results = resolve_test(skill_rating, roll, True, difficulty)
-
-    results_str = format_test_result(
-        your_name, skill_rating, results, skill_name,
-        original_skill_rating=original_skill_rating, difficulty=difficulty, modifier=modifier,
-    )
+    results_str = perform_test(your_name, skill_rating, difficulty, modifier, roll, skill_name, support)[2]
     if comment:
         results_str = f"**Test:** {comment}\n{results_str}"
 
@@ -196,27 +376,25 @@ def build_opposed_result(
     comment: Optional[str] = None,
     your_skill_name: Optional[str] = None,
     opponent_skill_name: Optional[str] = None,
+    your_support: Optional[Support] = None,
+    opponent_support: Optional[Support] = None,
 ) -> str:
-    """Resolve opposed tests, retaining support for a single participant."""
+    """Resolve opposed tests, also allowing a single participant."""
     your_victory = f"**{your_name}** wins" + (f" **{your_skill_name}**" if your_skill_name else "")
     opponent_victory = f"**{opponent_name}** wins" + (f" **{opponent_skill_name}**" if opponent_skill_name else "")
 
     # If opposed, make opponent's roll
     if opponent_skill_rating is not None:
-        original_opponent_skill_rating = opponent_skill_rating
-        opponent_skill_rating = modify_skill_rating(opponent_skill_rating, opponent_difficulty, opponent_modifier)
-        opponent_results = resolve_test(opponent_skill_rating, opponent_roll, True, opponent_difficulty)
-        opponent_results_str = format_test_result(
-            opponent_name, opponent_skill_rating, opponent_results, opponent_skill_name,
-            original_skill_rating=original_opponent_skill_rating,
-            difficulty=opponent_difficulty, modifier=opponent_modifier,
+        opponent_skill_rating, opponent_results, opponent_results_str = perform_test(
+            opponent_name, opponent_skill_rating, opponent_difficulty, opponent_modifier,
+            opponent_roll, opponent_skill_name, opponent_support,
         )
     else:
         opponent_results_str = ""
 
-    original_your_skill_rating = your_skill_rating
-    your_skill_rating = modify_skill_rating(your_skill_rating, your_difficulty, your_modifier)
-    your_results = resolve_test(your_skill_rating, your_roll, True, your_difficulty)
+    your_skill_rating, your_results, your_results_str = perform_test(
+        your_name, your_skill_rating, your_difficulty, your_modifier, your_roll, your_skill_name, your_support,
+    )
 
     if opponent_skill_rating is not None:
         differential = your_results["result"].value - opponent_results["result"].value
@@ -249,12 +427,6 @@ def build_opposed_result(
             winner_str += f'\nMagnitude of victory: **{magnitude}**.'
     else:
         winner_str = ''
-
-    your_results_str = format_test_result(
-        your_name, your_skill_rating, your_results, your_skill_name,
-        original_skill_rating=original_your_skill_rating,
-        difficulty=your_difficulty, modifier=your_modifier,
-    )
 
     final_output = your_results_str + "\n" + opponent_results_str + "\n\n" + winner_str
     if comment:

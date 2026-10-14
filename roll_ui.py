@@ -8,7 +8,10 @@ from typing import Optional
 
 import discord
 
-from rolls import Difficulty, build_opposed_result, build_tiered_result, flip_roll, modify_skill_rating
+from rolls import (
+    SUPPORTS, Difficulty, Support, build_opposed_result, build_tiered_result, flip_roll, modify_skill_rating,
+    support_problem,
+)
 
 
 log = logging.getLogger(__name__)
@@ -37,6 +40,7 @@ class Participant:
     modifier: int = 0
     roll: Optional[int] = None
     skill_name: str = ""
+    support: Optional[Support] = None
 
 
 def parse_integer(value: str, label: str, *, default: Optional[int] = None) -> Optional[int]:
@@ -60,6 +64,16 @@ def parse_roll(value: str, label: str) -> Optional[int]:
     if number is not None and not 1 <= number <= 100:
         raise ValueError(f"{label} must be between 1 and 100, or blank for a random roll.")
     return number
+
+
+def parse_support(kind: str, ratings: str, names: str) -> Support:
+    values = [parse_integer(value, "Supporting skill rating") for value in ratings.split(",")]
+    if None in values:
+        raise ValueError("Enter the supporting skill rating, such as 75.")
+    if len(values) > (3 if kind == "Rally" else 1):
+        raise ValueError("Rally takes up to three supporting skills." if kind == "Rally" else
+                         f"{kind} takes one supporting skill; only Rally takes several.")
+    return Support(kind, values, [name.strip() for name in names.split(",")] if kind == "Rally" else [names])
 
 
 class SetupModal(discord.ui.Modal):
@@ -220,6 +234,61 @@ class AdvancedModal(SetupModal):
         await self.setup.show_panel(interaction)
 
 
+class SupportModal(SetupModal):
+    def __init__(self, setup: "RollSetupView", opponent: bool = False):
+        super().__init__(setup, "Opponent support" if opponent else "Your support")
+        self.opponent = opponent
+        self.draft_key = "opponent_support" if opponent else "your_support"
+        support = (setup.opponent if opponent else setup.your).support
+        draft = setup.drafts.get(self.draft_key, {})
+        selected = draft.get("kind", support.kind if support else "None")
+        self.kind_input = self.field(
+            "Support",
+            discord.ui.Select(options=[
+                discord.SelectOption(label="No support", value="None", default=selected == "None"),
+                *(discord.SelectOption(label=kind, description=summary, default=kind == selected)
+                  for kind, summary in SUPPORTS.items()),
+            ]),
+            "How a supporting skill helps this test. Rules set its difficulty.",
+        )
+        self.ratings_input = self.field(
+            "Supporting skill rating",
+            discord.ui.TextInput(
+                default=draft.get("ratings", ", ".join(map(str, support.ratings)) if support else ""),
+                required=False, max_length=60, placeholder="e.g. 75; Rally takes up to three, e.g. 50, 75, 25",
+            ),
+            "Unmodified, like your skill rating.",
+        )
+        self.names_input = self.field(
+            "Supporting skill name (optional)",
+            discord.ui.TextInput(
+                default=draft.get("names", ", ".join(support.names) if support else ""), required=False,
+                max_length=100, placeholder="e.g. Acrobatics; for Rally, e.g. Climb, Swim, Jump",
+            ),
+        )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not await self.setup.interaction_check(interaction):
+            return
+        selected = self.kind_input.values
+        kind = selected[0] if selected else next(
+            option.value for option in self.kind_input.options if option.default
+        )
+        draft = {"kind": kind, "ratings": self.ratings_input.value.strip(), "names": self.names_input.value.strip()}
+        self.setup.drafts[self.draft_key] = draft
+        try:
+            support = None if kind == "None" else parse_support(kind, draft["ratings"], draft["names"])
+        except ValueError as error:
+            button = "Opponent support" if self.opponent else "Your support"
+            await self.setup.show_panel(
+                interaction, error=f"{error} Click **{button}** to correct it; your entries are saved."
+            )
+            return
+        (self.setup.opponent if self.opponent else self.setup.your).support = support
+        del self.setup.drafts[self.draft_key]
+        await self.setup.show_panel(interaction)
+
+
 class RollSetupView(discord.ui.View):
     def __init__(
         self, owner_id: int, your: Participant, opponent: Optional[Participant] = None,
@@ -236,6 +305,7 @@ class RollSetupView(discord.ui.View):
         self.finished = False
         if opponent is None:
             self.remove_item(self.edit_opponent)
+            self.remove_item(self.edit_opponent_support)
         self.roll_button.disabled = your.skill_rating is None
 
     @property
@@ -280,6 +350,13 @@ class RollSetupView(discord.ui.View):
                 lines.append(f"Manual roll: **{participant.roll}**")
             else:
                 lines.append("Roll: random d100")
+        if participant.support is not None:
+            support = participant.support
+            skills = ", ".join(
+                f"{discord.utils.escape_markdown(name)} (**{rating}**)" if name else f"**{rating}**"
+                for rating, name in zip(support.ratings, support.names + [""] * len(support.ratings))
+            )
+            lines.append(f"Support: **{support.kind}** with {skills}")
         return "\n".join(lines)
 
     def summary(self) -> discord.Embed:
@@ -298,7 +375,10 @@ class RollSetupView(discord.ui.View):
             comment = discord.utils.escape_markdown(self.comment)
             embed.description += f"\n\n**Test:** {comment}"
         if self.drafts:
-            labels = {"your": "Your details", "opponent": "Opponent details", "advanced": "Advanced options"}
+            labels = {
+                "your": "Your details", "opponent": "Opponent details", "advanced": "Advanced options",
+                "your_support": "Your support", "opponent_support": "Opponent support",
+            }
             pending = ", ".join(labels[key] for key in self.drafts)
             embed.description += f"\n\nCorrect the saved entries in **{pending}** before rolling."
         embed.set_footer(text="Only you can see this setup. It closes after 10 minutes of inactivity.")
@@ -325,11 +405,19 @@ class RollSetupView(discord.ui.View):
     async def edit_advanced(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(AdvancedModal(self))
 
-    @discord.ui.button(label="Roll", style=discord.ButtonStyle.success, row=1)
+    @discord.ui.button(label="Your support", style=discord.ButtonStyle.secondary, row=1)
+    async def edit_your_support(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(SupportModal(self))
+
+    @discord.ui.button(label="Opponent support", style=discord.ButtonStyle.secondary, row=1)
+    async def edit_opponent_support(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(SupportModal(self, opponent=True))
+
+    @discord.ui.button(label="Roll", style=discord.ButtonStyle.success, row=2)
     async def roll_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.submit_roll(interaction)
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=2)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.finished = True
         self.stop()
@@ -349,6 +437,13 @@ class RollSetupView(discord.ui.View):
         except ValueError as error:
             await self.show_panel(interaction, error=f"{error} Click **Advanced options** to correct it.")
             return
+        # Support depends on details that can change after it is chosen, so check it only now.
+        for participant, button in ((self.your, "Your support"), (self.opponent, "Opponent support")):
+            if participant is not None and participant.skill_rating is not None and participant.support is not None:
+                problem = support_problem(participant.skill_rating, participant.difficulty, participant.support)
+                if problem:
+                    await self.show_panel(interaction, error=f"{problem} Click **{button}** to correct it.")
+                    return
         # Set before the first await so double clicks cannot publish two rolls.
         self.finished = True
         try:
@@ -405,9 +500,13 @@ class RollResultView(discord.ui.View):
         # ponytail: buttons live in memory and close after 10 minutes, inside the 15-minute token that
         # removes them; use persistent views if play-by-post needs longer or buttons must survive restarts.
         super().__init__(timeout=SETUP_TIMEOUT)
-        # Roll copies now, so every change rebuilds the result from the same criteria.
+        # Roll copies now, so every change rebuilds the result from the same criteria. Buttons change only
+        # the main roll; supporting dice stay, and are read only if the new main roll calls for them.
         self.your, self.opponent = (
-            None if p is None else replace(p, roll=random.randint(1, 100) if p.roll is None else p.roll)
+            None if p is None else replace(
+                p, roll=random.randint(1, 100) if p.roll is None else p.roll,
+                support=p.support and replace(p.support, rolls=[random.randint(1, 100) for _ in p.support.ratings]),
+            )
             for p in (your, opponent)
         )
         self.comment = comment
@@ -429,6 +528,7 @@ class RollResultView(discord.ui.View):
             return build_tiered_result(
                 skill_rating=your.skill_rating, difficulty=your.difficulty, modifier=your.modifier,
                 roll=your.roll, your_name=your.name, comment=self.comment, skill_name=your.skill_name,
+                support=your.support,
             )
         opponent = self.opponent
         return build_opposed_result(
@@ -438,6 +538,7 @@ class RollResultView(discord.ui.View):
             opponent_difficulty=opponent.difficulty, opponent_modifier=opponent.modifier,
             opponent_roll=opponent.roll, opponent_name=opponent.name,
             opponent_skill_name=opponent.skill_name, comment=self.comment,
+            your_support=your.support, opponent_support=opponent.support,
         )
 
     def text(self) -> str:
