@@ -46,7 +46,7 @@ SUPPORT_EXAMPLES = [
     ("Attune", 90, 85, [60], [], T.STANDARD_SUCCESS),
     ("Attune", 90, 45, [60], [], T.GRAND_SUCCESS),
     ("Ward", 90, 97, [60], [35], T.PARTIAL_FAILURE),
-    ("Ward", 50, 99, [30], [2], T.STANDARD_SUCCESS),
+    ("Ward", 50, 99, [30], [2], T.FUMBLE),  # The rules' example lifts this Fumble, but Fumbles always stay Fumbles.
     ("Ward", 50, 80, [30], [8], T.PARTIAL_FAILURE),
     ("Mend", 90, 97, [60], [35], T.FAILURE),
     ("Mend", 50, 78, [30], [25], T.PARTIAL_FAILURE),
@@ -54,10 +54,17 @@ SUPPORT_EXAMPLES = [
     ("Rally", 90, 97, [50, 75, 25], [30, 40, 20], T.PARTIAL_FAILURE),
     ("Mirror", 90, 91, [75], [40], T.GRAND_SUCCESS),
     # No worked examples in the rules for these.
-    ("Foretelling", 60, 70, [90], [10], T.STANDARD_SUCCESS, D.HARD),  # Grand vs 60: Hard becomes Easy, 70 vs 90.
+    # Foretelling's supporting 90 is Tested at Hard (60): Grand and Critical ease Hard to Standard, so 30 vs 60 is
+    # a Superb Success, then add one and two Tiers.
+    ("Foretelling", 60, 30, [90], [10], T.GRAND_SUCCESS, D.HARD),
+    ("Foretelling", 60, 30, [90], [5], T.CRITICAL_SUCCESS, D.HARD),
     ("Foretelling", 60, 1, [90], [100], T.FUMBLE),
     ("Usurping", 50, 60, [80], [], T.STANDARD_SUCCESS),
     ("Redeem", 50, 80, [40], [30], T.STANDARD_SUCCESS),
+    # Fumbles always stay Fumbles, whatever the support.
+    ("Redeem", 50, 99, [40], [], T.FUMBLE),
+    ("Bolstering", 60, 99, [100], [], T.FUMBLE),
+    ("Gambit", 90, 100, [65], [15], T.FUMBLE, D.HARD),
 ]
 
 

@@ -37,7 +37,7 @@ SUPPORTS = {
     "Bolstering": "Higher skill. Same roll; +1 Tier if the support's Tier is better, even on a failure.",
     "Empowering": "Higher skill. Rolled after a successful test; the better Tier counts.",
     "Reining": "Higher skill. Rolled first; a success guarantees at least a Standard Success.",
-    "Foretelling": "Higher skill. Rolled first; its Tier makes your test easier or harder.",
+    "Foretelling": "Higher skill. Rolled first; its Tier makes your test easier or harder, and may add Tiers.",
     "Usurping": "Higher skill. Same roll against both skills; the better result counts.",
     "Gambit": "Equal or lower skill, penalized test. Rolled first, a step harder; shifts difficulty, may add Tiers.",
     "Temper": "Equal or lower skill. Rolled after a successful test; a success adds +1 Tier.",
@@ -54,8 +54,8 @@ HIGHER_SUPPORTS = {"Honing", "Bolstering", "Empowering", "Reining", "Foretelling
 # a Fumble is an automatic Fumble.
 FORETELLING = {
     Tier.SERIOUS_FAILURE: (0, -3, 0), Tier.FAILURE: (0, -2, 0), Tier.PARTIAL_FAILURE: (0, -1, 0),
-    Tier.STANDARD_SUCCESS: (1, 0, 0), Tier.SUPERB_SUCCESS: (2, 0, 0), Tier.GRAND_SUCCESS: (2, 1, 0),
-    Tier.CRITICAL_SUCCESS: (2, 2, 0),
+    Tier.STANDARD_SUCCESS: (1, 0, 0), Tier.SUPERB_SUCCESS: (2, 0, 0), Tier.GRAND_SUCCESS: (2, 0, 1),
+    Tier.CRITICAL_SUCCESS: (2, 0, 2),
 }
 GAMBIT = {
     **FORETELLING, Tier.STANDARD_SUCCESS: (0, 1, 0), Tier.SUPERB_SUCCESS: (0, 1, 1),
@@ -245,7 +245,7 @@ def perform_test(
             diff = shift(difficulty, easier=easier, negate=negate)
             lines[-1] += f"; the test {'stays' if diff == difficulty else 'becomes'} {title(diff)}"
             if bonus:
-                lines[-1] += f", +{bonus} Tier to the roll"
+                lines[-1] += f", +{bonus} {'Tier' if bonus == 1 else 'Tiers'} to the roll"
 
     target = modify_skill_rating(skill_rating, diff, modifier)
     if kind in ("Foretelling", "Gambit") and first == Tier.FUMBLE:
@@ -260,9 +260,13 @@ def perform_test(
 
     S = Tier.STANDARD_SUCCESS
     main = final = results['result']
-    if kind == "Gambit":
+    if main == Tier.FUMBLE:
+        # Fumbles always stay Fumbles, so support not rolled yet goes unused.
+        if first is None:
+            lines.append(f"*{kind}*: not used")
+    elif kind in ("Foretelling", "Gambit"):
         final = improve(main, bonus)
-    elif kind == "Reining" and main != Tier.FUMBLE:
+    elif kind == "Reining":
         if first >= S:
             final = improve(max(first, main)) if main >= S else S
         elif main < S:
@@ -270,7 +274,7 @@ def perform_test(
     elif kind == "Ward" and first >= S and main < S:
         if first == Tier.CRITICAL_SUCCESS:
             final = S
-        elif main != Tier.FUMBLE:
+        else:
             # Each Level of Success softens the failure, but at best to a Partial Failure.
             final = Tier(min(main + first - Tier.PARTIAL_FAILURE, Tier.PARTIAL_FAILURE))
     elif kind == "Mirror" and first >= S:
@@ -295,7 +299,7 @@ def perform_test(
         if supporting(0) >= S:
             final = improve(main)
     elif kind == "Mend":
-        if supporting(0, shift(difficulty, negate=1)) >= S and main != Tier.FUMBLE:
+        if supporting(0, shift(difficulty, negate=1)) >= S:
             final = improve(main)
     elif kind == "Redeem":
         if supporting(0) >= S:
